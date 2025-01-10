@@ -12,3 +12,9 @@ dependencies = [
 
 [tool.uv.sources]
 titan-core = { workspace = true }
+
+[tool.hatch.build]
+packages = ["."]
+
+[tool.poetry]
+package-mode = false
