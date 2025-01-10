@@ -1,4 +1,4 @@
-titan-core,
+"titan-core",
 snowflake-connector-python,
 streamlit,
 pandas,
