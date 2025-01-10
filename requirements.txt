@@ -1,5 +1,5 @@
-"titan-core",
-snowflake-connector-python,
-streamlit,
-pandas,
+titan-core
+snowflake-connector-python
+streamlit
+pandas
 altair<5
