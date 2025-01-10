@@ -1,5 +1,5 @@
 [project]
-name = "titan-core"
+name = "titan"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
