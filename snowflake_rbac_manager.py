@@ -26,7 +26,7 @@ class SnowflakeRBACManager:
     def get_role_privileges(self, role_name: str) -> List[Dict]:
         """Fetch all privileges for a given role"""
         query = f"""
-        SHOW PRIVILEGES ON ROLE {role_name}
+        SHOW GRANTS TO ROLE {role_name}
         """
         cur = self.connection.cursor().execute(query, (role_name,))
         results = cur.fetchall()
