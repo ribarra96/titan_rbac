@@ -1,0 +1,12 @@
+[project]
+name = "titan-core"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "titan-core",
+]
+
+[tool.uv.sources]
+titan-core = { workspace = true }
