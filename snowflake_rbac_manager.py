@@ -18,7 +18,7 @@ class SnowflakeRBACManager:
                 "password": st.secrets["snowflake"]["password"],
                 "role": "SECURITYADMIN",  # Best practice for RBAC management
             }
-            return Session.builder.config(connection_params).create()
+            return Session.builder.configs(connection_params).create()
         except Exception as e:
             st.error(f"Failed to connect to Snowflake: {str(e)}")
             return None
