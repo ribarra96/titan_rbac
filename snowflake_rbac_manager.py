@@ -29,7 +29,7 @@ class SnowflakeRBACManager:
         query = f"""
         SHOW GRANTS TO ROLE {role_name};
         """
-        results = self.session.query(query).collect()
+        results = self.session.sql(query).collect()
         return [dict(zip(['privilege', 'granted_on', 'object_name', 'granted_to', 'grantee_name'], row))
                 for row in results]
 
