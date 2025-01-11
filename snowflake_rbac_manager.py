@@ -1,5 +1,5 @@
 import streamlit as st
-import snowflake.connector
+from snowflake.snowpark import Session
 import os
 from typing import List, Dict
 from titan.blueprint import Blueprint
@@ -7,7 +7,7 @@ from titan.resources import Grant, Role, Warehouse, Database, Schema
 
 class SnowflakeRBACManager:
     def __init__(self):
-        self.connection = self._get_snowflake_connection()
+        self.session = self._get_snowflake_connection()
         
     def _get_snowflake_connection(self):
         """Establish Snowflake connection using environment variables or Streamlit secrets"""
@@ -18,7 +18,7 @@ class SnowflakeRBACManager:
                 "password": st.secrets["snowflake"]["password"],
                 "role": "SECURITYADMIN",  # Best practice for RBAC management
             }
-            return snowflake.connector.connect(**connection_params)
+            return Session.builder.config(**connection_params).create()
         except Exception as e:
             st.error(f"Failed to connect to Snowflake: {str(e)}")
             return None
@@ -28,8 +28,7 @@ class SnowflakeRBACManager:
         query = f"""
         SHOW GRANTS TO ROLE {role_name};
         """
-        cur = self.connection.cursor().execute(query, (role_name,))
-        results = cur.fetchall()
+        results = self.session(query).collect()
         return [dict(zip(['privilege', 'granted_on', 'object_name', 'granted_to', 'grantee_name'], row))
                 for row in results]
 

@@ -1,5 +1,5 @@
 titan-core
-snowflake-connector-python
+snowflake-snowpark-python
 streamlit
 pandas
 altair<5
