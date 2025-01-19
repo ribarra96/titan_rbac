@@ -25,14 +25,64 @@ class SnowflakeRBACManager:
             st.error(f"Failed to connect to Snowflake: {str(e)}")
             return None
 
+    def consolidate_privileges(self, privileges: list) -> list:
+        """Consolidate privileges by grouping similar grants"""
+        # Convert privileges to DataFrame for easier manipulation
+        df = pd.DataFrame(privileges)
+        consolidated = []
+        
+        # Group by schema level
+        schema_groups = df.groupby(['database_name', 'schema_name', 'privilege_type'])
+        for (db, schema, priv), group in schema_groups:
+            objects = group['object_name'].tolist()
+            object_types = group['object_type'].unique()
+            
+            # Check if all objects of a type in schema have same privilege
+            for obj_type in object_types:
+                type_objects = group[group['object_type'] == obj_type]['object_name'].tolist()
+                
+                # Query to get total objects of this type in schema
+                total_objects_query = f"""
+                SELECT COUNT(*) as total 
+                FROM {db}.INFORMATION_SCHEMA.{obj_type}S 
+                WHERE SCHEMA_NAME = '{schema}'
+                """
+                total_count = self.session.sql(total_objects_query).collect()[0]['TOTAL']
+                
+                if len(type_objects) == total_count:
+                    # All objects of this type have this privilege
+                    consolidated.append({
+                        'privilege': priv,
+                        'granted_on': f'ALL {obj_type}S',
+                        'object_name': f'{db}.{schema}',
+                        'scope': 'SCHEMA'
+                    })
+                else:
+                    # Individual object privileges
+                    for obj in type_objects:
+                        consolidated.append({
+                            'privilege': priv,
+                            'granted_on': obj_type,
+                            'object_name': obj,
+                            'scope': 'OBJECT'
+                        })
+        
+        return consolidated
+
     def get_role_privileges(self, role_name: str) -> List[Dict]:
-        """Fetch all privileges for a given role"""
+        """Fetch all privileges for a given role with consolidated view"""
         query = f"""
-        SHOW GRANTS TO ROLE {role_name};
+        SELECT 
+            PRIVILEGE as privilege_type,
+            GRANTED_ON as object_type,
+            NAME as object_name,
+            DATABASE_NAME,
+            SCHEMA_NAME
+        FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES
+        WHERE GRANTEE_NAME = '{role_name}'
         """
         results = self.session.sql(query).collect()
-        return [dict(zip(['privilege', 'granted_on', 'object_name', 'granted_to', 'grantee_name'], row))
-                for row in results]
+        return self.consolidate_privileges(results)
 
     def create_functional_roles(self, base_role_name: str) -> Blueprint:
         """Create functional roles following Snowflake best practices"""
@@ -57,25 +107,44 @@ class SnowflakeRBACManager:
         return Blueprint(resources=[*roles, warehouse, *grants])
 
     def compare_privileges(self, principal1: str, principal2: str, principal_type: str = "ROLE") -> dict:
-        """Compare privileges between two roles or users"""
+        """Compare privileges between two roles or users with consolidated view"""
         if principal_type == "ROLE":
-            query1 = f"SHOW GRANTS TO ROLE {principal1}"
-            query2 = f"SHOW GRANTS TO ROLE {principal2}"
+            privileges1 = self.get_role_privileges(principal1)
+            privileges2 = self.get_role_privileges(principal2)
         else:  # USER
-            query1 = f"SHOW GRANTS TO USER {principal1}"
-            query2 = f"SHOW GRANTS TO USER {principal2}"
+            query1 = f"""
+            SELECT 
+                PRIVILEGE as privilege_type,
+                GRANTED_ON as object_type,
+                NAME as object_name,
+                DATABASE_NAME,
+                SCHEMA_NAME
+            FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS
+            WHERE GRANTEE_NAME = '{principal1}'
+            """
+            query2 = f"""
+            SELECT 
+                PRIVILEGE as privilege_type,
+                GRANTED_ON as object_type,
+                NAME as object_name,
+                DATABASE_NAME,
+                SCHEMA_NAME
+            FROM SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS
+            WHERE GRANTEE_NAME = '{principal2}'
+            """
+            privileges1 = self.consolidate_privileges(self.session.sql(query1).collect())
+            privileges2 = self.consolidate_privileges(self.session.sql(query2).collect())
         
-        results1 = self.session.sql(query1).collect()
-        results2 = self.session.sql(query2).collect()
-        
-        # Convert results to sets of privileges for comparison
-        privileges1 = {(row['privilege'], row['granted_on'], row['name']) for row in results1}
-        privileges2 = {(row['privilege'], row['granted_on'], row['name']) for row in results2}
+        # Convert to sets for comparison
+        priv_set1 = {(p['privilege'], p['granted_on'], p['object_name'], p.get('scope', 'OBJECT')) 
+                     for p in privileges1}
+        priv_set2 = {(p['privilege'], p['granted_on'], p['object_name'], p.get('scope', 'OBJECT')) 
+                     for p in privileges2}
         
         return {
-            'unique_to_first': privileges1 - privileges2,
-            'unique_to_second': privileges2 - privileges1,
-            'common': privileges1 & privileges2
+            'unique_to_first': priv_set1 - priv_set2,
+            'unique_to_second': priv_set2 - priv_set1,
+            'common': priv_set1 & priv_set2
         }
 
 def main():
@@ -192,8 +261,10 @@ def main():
                         st.subheader(f"Privileges unique to {principal1}")
                         if comparison['unique_to_first']:
                             df1 = pd.DataFrame(comparison['unique_to_first'], 
-                                             columns=['Privilege', 'Granted On', 'Object Name'])
-                            st.dataframe(df1)
+                                              columns=['Privilege', 'Granted On', 'Object Name', 'Scope'])
+                            # Sort by scope to show schema-level privileges first
+                            df1 = df1.sort_values('Scope', ascending=False)
+                            st.dataframe(df1.drop('Scope', axis=1))
                         else:
                             st.info(f"No unique privileges for {principal1}")
                     
@@ -201,8 +272,10 @@ def main():
                         st.subheader(f"Privileges unique to {principal2}")
                         if comparison['unique_to_second']:
                             df2 = pd.DataFrame(comparison['unique_to_second'], 
-                                             columns=['Privilege', 'Granted On', 'Object Name'])
-                            st.dataframe(df2)
+                                              columns=['Privilege', 'Granted On', 'Object Name', 'Scope'])
+                            # Sort by scope to show schema-level privileges first
+                            df2 = df2.sort_values('Scope', ascending=False)
+                            st.dataframe(df2.drop('Scope', axis=1))
                         else:
                             st.info(f"No unique privileges for {principal2}")
                     
@@ -210,8 +283,10 @@ def main():
                         st.subheader("Common Privileges")
                         if comparison['common']:
                             df3 = pd.DataFrame(comparison['common'], 
-                                             columns=['Privilege', 'Granted On', 'Object Name'])
-                            st.dataframe(df3)
+                                              columns=['Privilege', 'Granted On', 'Object Name', 'Scope'])
+                            # Sort by scope to show schema-level privileges first
+                            df3 = df3.sort_values('Scope', ascending=False)
+                            st.dataframe(df3.drop('Scope', axis=1))
                         else:
                             st.info("No common privileges found")
                             
