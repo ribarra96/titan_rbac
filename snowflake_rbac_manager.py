@@ -4,6 +4,7 @@ import os
 from typing import List, Dict
 from titan.blueprint import Blueprint
 from titan.resources import Grant, Role, Warehouse, Database, Schema
+import pandas as pd
 
 class SnowflakeRBACManager:
     def __init__(self):
@@ -55,20 +56,39 @@ class SnowflakeRBACManager:
         
         return Blueprint(resources=[*roles, warehouse, *grants])
 
+    def compare_privileges(self, principal1: str, principal2: str, principal_type: str = "ROLE") -> dict:
+        """Compare privileges between two roles or users"""
+        if principal_type == "ROLE":
+            query1 = f"SHOW GRANTS TO ROLE {principal1}"
+            query2 = f"SHOW GRANTS TO ROLE {principal2}"
+        else:  # USER
+            query1 = f"SHOW GRANTS TO USER {principal1}"
+            query2 = f"SHOW GRANTS TO USER {principal2}"
+        
+        results1 = self.session.sql(query1).collect()
+        results2 = self.session.sql(query2).collect()
+        
+        # Convert results to sets of privileges for comparison
+        privileges1 = {(row['privilege'], row['granted_on'], row['name']) for row in results1}
+        privileges2 = {(row['privilege'], row['granted_on'], row['name']) for row in results2}
+        
+        return {
+            'unique_to_first': privileges1 - privileges2,
+            'unique_to_second': privileges2 - privileges1,
+            'common': privileges1 & privileges2
+        }
+
 def main():
     st.write("Loading application...")  # Debug message
     st.title("Snowflake RBAC Manager")
     
-    # Test if basic Streamlit functionality works
-    if st.button("Click me"):
-        st.write("Button clicked!")
     
     rbac_manager = SnowflakeRBACManager()
     
     # Sidebar for main operations
     operation = st.sidebar.selectbox(
         "Select Operation",
-        ["View Role Privileges", "Create New Role", "Manage Privileges"]
+        ["View Role Privileges", "Create New Role", "Manage Privileges", "Compare Privileges"]
     )
     
     if operation == "View Role Privileges":
@@ -148,6 +168,57 @@ def main():
                     st.error(f"Error managing privileges: {str(e)}")
             else:
                 st.warning("Please fill in all fields")
+    
+    elif operation == "Compare Privileges":
+        st.header("Compare Privileges")
+        
+        principal_type = st.radio("Select Principal Type", ["ROLE", "USER"])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            principal1 = st.text_input(f"First {principal_type}").upper()
+        with col2:
+            principal2 = st.text_input(f"Second {principal_type}").upper()
+            
+        if st.button("Compare"):
+            if principal1 and principal2:
+                try:
+                    comparison = rbac_manager.compare_privileges(principal1, principal2, principal_type)
+                    
+                    # Display results in tabs
+                    tab1, tab2, tab3 = st.tabs(["Unique to First", "Unique to Second", "Common Privileges"])
+                    
+                    with tab1:
+                        st.subheader(f"Privileges unique to {principal1}")
+                        if comparison['unique_to_first']:
+                            df1 = pd.DataFrame(comparison['unique_to_first'], 
+                                             columns=['Privilege', 'Granted On', 'Object Name'])
+                            st.dataframe(df1)
+                        else:
+                            st.info(f"No unique privileges for {principal1}")
+                    
+                    with tab2:
+                        st.subheader(f"Privileges unique to {principal2}")
+                        if comparison['unique_to_second']:
+                            df2 = pd.DataFrame(comparison['unique_to_second'], 
+                                             columns=['Privilege', 'Granted On', 'Object Name'])
+                            st.dataframe(df2)
+                        else:
+                            st.info(f"No unique privileges for {principal2}")
+                    
+                    with tab3:
+                        st.subheader("Common Privileges")
+                        if comparison['common']:
+                            df3 = pd.DataFrame(comparison['common'], 
+                                             columns=['Privilege', 'Granted On', 'Object Name'])
+                            st.dataframe(df3)
+                        else:
+                            st.info("No common privileges found")
+                            
+                except Exception as e:
+                    st.error(f"Error comparing privileges: {str(e)}")
+            else:
+                st.warning(f"Please enter both {principal_type}s to compare")
 
 if __name__ == "__main__":
     main() 
